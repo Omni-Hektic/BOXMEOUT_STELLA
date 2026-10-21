@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DisputeModal } from "./DisputeModal";
 import { Market } from "@/lib/api";
+import * as stellar from "@/lib/stellar";
 
 jest.mock("@/hooks/useWallet", () => ({
   useWallet: jest.fn(() => ({
@@ -10,6 +11,7 @@ jest.mock("@/hooks/useWallet", () => ({
     isConnected: true,
     walletNotInstalled: false,
     networkPassphrase: null,
+    isNetworkMismatched: false,
     connect: jest.fn(),
     disconnect: jest.fn(),
     signTransaction: jest.fn().mockResolvedValue("signed-xdr"),
@@ -25,6 +27,7 @@ jest.mock("@/components/ToastProvider", () => ({
 jest.mock("@/lib/stellar", () => ({
   buildSorobanInvocation: jest.fn().mockResolvedValue("mock-xdr"),
   submitTransaction: jest.fn().mockResolvedValue({ status: "SUCCESS" }),
+  str: jest.fn().mockResolvedValue("mock-scval-str"),
 }));
 
 const now = Date.now();
@@ -115,11 +118,24 @@ describe("DisputeModal", () => {
     await waitFor(() => expect(onDisputed).toHaveBeenCalledTimes(1));
   });
 
+  it("builds dispute_resolution against the market contract address", async () => {
+    const user = userEvent.setup();
+    render(
+      <DisputeModal market={buildMarket()} userBets={mockUserBets} isOpen onDisputed={jest.fn()} onClose={jest.fn()} />
+    );
+    await user.type(screen.getByRole("textbox"), "This is a valid reason with enough characters.");
+    await user.click(screen.getByRole("button", { name: /Submit Dispute/i }));
+    await waitFor(() =>
+      expect(stellar.buildSorobanInvocation).toHaveBeenCalledWith(
+        expect.objectContaining({ contractId: "CA1", method: "dispute_resolution" })
+      )
+    );
+  });
+
   it("closes on backdrop click", async () => {
     const user = userEvent.setup();
     const onClose = jest.fn();
     render(<DisputeModal market={buildMarket()} isOpen onDisputed={jest.fn()} onClose={onClose} />);
-    // Click the backdrop overlay (the outermost fixed div)
     const backdrop = document.querySelector(".fixed.inset-0") as HTMLElement;
     await user.click(backdrop);
     expect(onClose).toHaveBeenCalledTimes(1);

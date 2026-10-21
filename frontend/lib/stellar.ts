@@ -220,9 +220,7 @@ function toScVal(sdk: StellarSdk, arg: unknown): xdr.ScVal {
  * must be encoded with this helper.
  */
 export async function toU64ScVal(value: bigint): Promise<xdr.ScVal> {
-  const { nativeToScVal } = await loadSdk();
-
-  return nativeToScVal(value, { type: "u64" });
+  return u64(value);
 }
 
 /**

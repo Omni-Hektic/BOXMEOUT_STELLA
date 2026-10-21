@@ -10,6 +10,7 @@ const config = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
     "^zod$": "<rootDir>/node_modules/next/dist/compiled/zod",
+    "^@creit\\.tech/stellar-wallets-kit$": "<rootDir>/e2e/mocks/walletKit.ts",
   },
   // Fixture modules live beside the tests that use them and must not run as suites
   testPathIgnorePatterns: ["<rootDir>/node_modules/", "<rootDir>/.next/", "<rootDir>/e2e/"],

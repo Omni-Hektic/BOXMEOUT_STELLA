@@ -20,9 +20,9 @@ describe("lib/config", () => {
   });
 
   it("exposes the factory contract ID under the name used in .env.example", () => {
-    const config = loadConfig({ NEXT_PUBLIC_MARKET_FACTORY_CONTRACT_ID: "CFACTORY" });
+    const config = loadConfig({ NEXT_PUBLIC_MARKET_FACTORY_CONTRACT_ID: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ" });
 
-    expect(config.MARKET_FACTORY_CONTRACT_ID).toBe("CFACTORY");
+    expect(config.MARKET_FACTORY_CONTRACT_ID).toBe("CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ");
   });
 
   it("derives the passphrase from the network when none is set", () => {

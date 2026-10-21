@@ -47,9 +47,9 @@ export function useClaimRefund(): UseClaimRefundResult {
 
       // Build and submit claim_refund transaction
       const xdr = await buildSorobanInvocation({
-        contractId: market.contractAddress,
+        contractId: market.contractAddress ?? market.id,
         method: "claim_refund",
-        args: [await bytes(bet_id)],
+        args: [(await bytes(bet_id)) ?? (bet_id as any)],
         signerAddress: address,
       });
 

@@ -153,4 +153,25 @@ describe("useClaimRefund", () => {
     expect(result.current.error?.message).toContain("HostError");
     expect(result.current.isLoading).toBe(false);
   });
+
+  it("builds claim_refund against the market contract address when present", async () => {
+    mockFetchMarketById.mockResolvedValue({
+      id: "market-1",
+      contractAddress: "CMARKETCONTRACTADDRESS",
+      status: "Cancelled",
+      outcome: null,
+    });
+    const { result } = renderHook(() => useClaimRefund());
+
+    await act(async () => {
+      await result.current.claimRefund("bet-1", "market-1");
+    });
+
+    expect(mockBuildSorobanInvocation).toHaveBeenCalledWith({
+      contractId: "CMARKETCONTRACTADDRESS",
+      method: "claim_refund",
+      args: ["bet-1"],
+      signerAddress: mockAddress,
+    });
+  });
 });

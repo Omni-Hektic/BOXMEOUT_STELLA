@@ -11,7 +11,7 @@ export type TransactionStatus = TxStatus;
 
 export interface TransactionStatusModalProps {
   /** Whether the modal is visible */
-  isOpen: boolean;
+  isOpen?: boolean;
   /** Current transaction state */
   status: TxStatus;
   /** Optional title override per state */
@@ -133,7 +133,7 @@ function ErrorIcon() {
  * - **error**:  warning icon + human-readable error message (never a raw stack trace)
  */
 export function TransactionStatusModal({
-  isOpen,
+  isOpen = true,
   status,
   title,
   txHash,

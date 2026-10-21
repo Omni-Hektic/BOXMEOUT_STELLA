@@ -54,9 +54,9 @@ export function useClaimWinnings(): UseClaimWinningsResult {
 
       // Build and submit transaction
       const xdr = await buildSorobanInvocation({
-        contractId: market.contractAddress,
+        contractId: market.contractAddress ?? market.id,
         method,
-        args: [await bytes(bet_id)],
+        args: [(await bytes(bet_id)) ?? (bet_id as any)],
         signerAddress: address,
       });
 

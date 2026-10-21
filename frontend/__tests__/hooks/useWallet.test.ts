@@ -3,28 +3,30 @@ import "@testing-library/jest-dom";
 import { useWallet, WalletProvider, UserRejectedError } from "@/hooks/useWallet";
 import { NETWORK_PASSPHRASE } from "@/lib/stellar";
 
-jest.mock("@stellar/freighter-api", () => ({
-  isConnected: jest.fn(),
-  requestAccess: jest.fn(),
+const mockKit = {
+  openModal: jest.fn(),
+  setWallet: jest.fn(),
   getAddress: jest.fn(),
   getNetwork: jest.fn(),
   signTransaction: jest.fn(),
-}));
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const freighter = require("@stellar/freighter-api") as {
-  isConnected: jest.Mock;
-  requestAccess: jest.Mock;
-  getAddress: jest.Mock;
-  getNetwork: jest.Mock;
-  signTransaction: jest.Mock;
+  signMessage: jest.fn(),
+  disconnect: jest.fn(),
 };
+
+jest.mock("@/lib/walletKit", () => ({
+  getWalletKit: () => mockKit,
+  readLastWalletId: jest.fn(() => null),
+  persistLastWalletId: jest.fn(),
+}));
 
 describe("useWallet", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    freighter.getNetwork.mockResolvedValue({ network: "TESTNET", networkPassphrase: NETWORK_PASSPHRASE });
+    mockKit.getNetwork.mockResolvedValue({ network: "TESTNET", networkPassphrase: NETWORK_PASSPHRASE });
+    mockKit.openModal.mockImplementation(({ onWalletSelected }: { onWalletSelected: (opt: { id: string }) => Promise<void> }) => {
+      void onWalletSelected({ id: "freighter" });
+    });
   });
 
   it("throws when rendered outside of WalletProvider", () => {
@@ -35,9 +37,9 @@ describe("useWallet", () => {
     spy.mockRestore();
   });
 
-  describe("when Freighter is not installed", () => {
-    it("sets walletNotInstalled to true and does not throw", async () => {
-      freighter.isConnected.mockResolvedValue({ isConnected: false });
+  describe("when wallet is not installed or access fails", () => {
+    it("sets walletNotInstalled to true when getAddress returns empty", async () => {
+      mockKit.getAddress.mockResolvedValue({ address: "" });
 
       const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
 
@@ -48,43 +50,10 @@ describe("useWallet", () => {
       expect(result.current.walletNotInstalled).toBe(true);
       expect(result.current.isConnected).toBe(false);
       expect(result.current.address).toBeNull();
-      expect(freighter.requestAccess).not.toHaveBeenCalled();
     });
 
-    it("sets walletNotInstalled to true when isConnected returns an error", async () => {
-      freighter.isConnected.mockResolvedValue({
-        isConnected: false,
-        error: { code: -1, message: "Freighter is not installed" },
-      });
-
-      const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
-
-      await act(async () => {
-        await result.current.connect();
-      });
-
-      expect(result.current.walletNotInstalled).toBe(true);
-    });
-
-    it("sets walletNotInstalled to true when API throws", async () => {
-      freighter.isConnected.mockRejectedValue(new Error("Extension not found"));
-
-      const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
-
-      await act(async () => {
-        await result.current.connect();
-      });
-
-      expect(result.current.walletNotInstalled).toBe(true);
-      expect(result.current.isConnected).toBe(false);
-    });
-
-    it("sets walletNotInstalled when the user rejects access", async () => {
-      freighter.isConnected.mockResolvedValue({ isConnected: true });
-      freighter.requestAccess.mockResolvedValue({
-        address: "",
-        error: { code: -4, message: "User rejected" },
-      });
+    it("sets walletNotInstalled to true when wallet throws", async () => {
+      mockKit.getAddress.mockRejectedValue(new Error("Extension not found"));
 
       const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
 
@@ -97,12 +66,11 @@ describe("useWallet", () => {
     });
   });
 
-  describe("when Freighter is installed and access is granted", () => {
+  describe("when wallet is installed and access is granted", () => {
     const TEST_ADDRESS = "GABCDE1234567890ABCDE1234567890ABCDE1234567890ABCDE12";
 
     beforeEach(() => {
-      freighter.isConnected.mockResolvedValue({ isConnected: true });
-      freighter.requestAccess.mockResolvedValue({ address: TEST_ADDRESS });
+      mockKit.getAddress.mockResolvedValue({ address: TEST_ADDRESS });
     });
 
     it("sets address, isConnected and network on successful connect", async () => {
@@ -112,7 +80,7 @@ describe("useWallet", () => {
         await result.current.connect();
       });
 
-      expect(freighter.requestAccess).toHaveBeenCalled();
+      expect(mockKit.setWallet).toHaveBeenCalledWith("freighter");
       expect(result.current.address).toBe(TEST_ADDRESS);
       expect(result.current.isConnected).toBe(true);
       expect(result.current.walletNotInstalled).toBe(false);
@@ -136,7 +104,7 @@ describe("useWallet", () => {
     });
 
     it("signs a transaction with the connected address and network", async () => {
-      freighter.signTransaction.mockResolvedValue({ signedTxXdr: "signed-xdr", signerAddress: TEST_ADDRESS });
+      mockKit.signTransaction.mockResolvedValue({ signedTxXdr: "signed-xdr" });
 
       const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
 
@@ -145,18 +113,14 @@ describe("useWallet", () => {
       });
 
       await expect(result.current.signTransaction("unsigned-xdr")).resolves.toBe("signed-xdr");
-      expect(freighter.signTransaction).toHaveBeenCalledWith("unsigned-xdr", {
+      expect(mockKit.signTransaction).toHaveBeenCalledWith("unsigned-xdr", {
         networkPassphrase: NETWORK_PASSPHRASE,
         address: TEST_ADDRESS,
       });
     });
 
-    it("throws a typed UserRejectedError when the user rejects signing", async () => {
-      freighter.signTransaction.mockResolvedValue({
-        signedTxXdr: "",
-        signerAddress: "",
-        error: { code: -4, message: "User declined access" },
-      });
+    it("maps a rejected signTransaction promise to UserRejectedError", async () => {
+      mockKit.signTransaction.mockRejectedValue(new Error("User rejected the request"));
 
       const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
 
@@ -167,8 +131,8 @@ describe("useWallet", () => {
       await expect(result.current.signTransaction("unsigned-xdr")).rejects.toBeInstanceOf(UserRejectedError);
     });
 
-    it("maps a rejected signTransaction promise to UserRejectedError", async () => {
-      freighter.signTransaction.mockRejectedValue(new Error("User rejected the request"));
+    it("signs a message and maps user decline to UserRejectedError", async () => {
+      mockKit.signMessage.mockResolvedValueOnce({ signedMessage: "sig-123" });
 
       const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
 
@@ -176,7 +140,10 @@ describe("useWallet", () => {
         await result.current.connect();
       });
 
-      await expect(result.current.signTransaction("unsigned-xdr")).rejects.toBeInstanceOf(UserRejectedError);
+      await expect(result.current.signMessage("hello")).resolves.toBe("sig-123");
+
+      mockKit.signMessage.mockRejectedValueOnce(new Error("User declined"));
+      await expect(result.current.signMessage("hello")).rejects.toBeInstanceOf(UserRejectedError);
     });
   });
 
@@ -184,6 +151,6 @@ describe("useWallet", () => {
     const { result } = renderHook(() => useWallet(), { wrapper: WalletProvider });
 
     await expect(result.current.signTransaction("unsigned-xdr")).rejects.toThrow("Wallet not connected");
-    expect(freighter.signTransaction).not.toHaveBeenCalled();
+    expect(mockKit.signTransaction).not.toHaveBeenCalled();
   });
 });

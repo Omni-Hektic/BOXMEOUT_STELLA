@@ -3,7 +3,6 @@
 import {
   createElement,
   createContext,
-  createElement,
   useCallback,
   useContext,
   useEffect,
@@ -109,19 +108,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Opens the Kit's picker. The wallet the user chooses is remembered for the next visit.
   const connect = useCallback(async () => {
-    getWalletKit().openModal({
-      onWalletSelected: async (option) => {
-        try {
-          const wallets = getWalletKit();
-          wallets.setWallet(option.id);
-          const { address } = await wallets.getAddress();
-          persistLastWalletId(option.id);
-          setState((prev) => ({ ...prev, address, connected: true, walletNotInstalled: false }));
-          await refreshNetwork();
-        } catch {
-          setState((prev) => ({ ...prev, walletNotInstalled: true }));
-        }
-      },
+    await new Promise<void>((resolve) => {
+      getWalletKit().openModal({
+        onWalletSelected: async (option) => {
+          try {
+            const wallets = getWalletKit();
+            wallets.setWallet(option.id);
+            const { address } = await wallets.getAddress();
+            if (!address) {
+              setState((prev) => ({ ...prev, walletNotInstalled: true }));
+              resolve();
+              return;
+            }
+            persistLastWalletId(option.id);
+            setState((prev) => ({ ...prev, address, connected: true, walletNotInstalled: false }));
+            await refreshNetwork();
+          } catch {
+            setState((prev) => ({ ...prev, walletNotInstalled: true }));
+          } finally {
+            resolve();
+          }
+        },
+      });
     });
   }, [refreshNetwork]);
 
@@ -153,25 +161,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [state.address],
   );
 
-    let result: Awaited<ReturnType<typeof freighterSignTransaction>>;
-    try {
-      result = await freighterSignTransaction(xdr, {
-        networkPassphrase: NETWORK_PASSPHRASE,
-        address: state.address,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (isUserRejection(message)) throw new UserRejectedError(message);
-      throw err;
-    }
-
-    if (result.error) {
-      const message = result.error.message;
-      if (isUserRejection(message)) throw new UserRejectedError(message);
-      throw new Error(message);
-    }
-
-      return result.signedTxXdr;
+  const signMessage = useCallback(
+    async (message: string): Promise<string> => {
+      if (!state.address) throw new Error("Wallet not connected");
+      try {
+        const result = await getWalletKit().signMessage(message, {
+          networkPassphrase: NETWORK_PASSPHRASE,
+          address: state.address,
+        });
+        return result.signedMessage;
+      } catch (err) {
+        const text = err instanceof Error ? err.message : String(err);
+        if (isUserRejection(text)) throw new UserRejectedError(text);
+        throw err;
+      }
     },
     [state.address],
   );
