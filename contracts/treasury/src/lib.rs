@@ -1,6 +1,9 @@
 #![no_std]
-use shared::{events, types::ProtocolConfig};
-use soroban_sdk::{contract, contractimpl, token, Address, Bytes, Env, String, Symbol, Vec};
+use shared::{errors::ContractError, events, types::ProtocolConfig};
+use soroban_sdk::{
+    contract, contractimpl, panic_with_error, token, Address, Bytes, Env, IntoVal, String, Symbol,
+    Vec,
+};
 
 /// Maximum number of entries kept in `WITHDRAWAL_LOG`. Older entries are
 /// evicted first; the `fee_withdrawn` / `EmrgDrain` events remain the
@@ -150,12 +153,12 @@ impl Treasury {
         daily_limit: i128,
     ) {
         if env.storage().persistent().has(&key_admin(&env)) {
-            return Err(ContractError::AlreadyInitialized);
+            panic!("already initialized");
         }
 
         // Validate fee_bps does not exceed 10% (1000 basis points)
         if fee_bps > 1000 {
-            return Err(ContractError::Unauthorized);
+            panic!("fee_bps exceeds maximum of 1000 (10%)");
         }
         if daily_limit <= 0 {
             panic!("daily_limit must be positive");
@@ -252,7 +255,7 @@ impl Treasury {
         let registered: Option<Address> = env.invoke_contract(
             &factory,
             &Symbol::new(&env, "get_market_address"),
-            soroban_sdk::vec![&env, market_id.to_val()],
+            soroban_sdk::vec![&env, market_id.clone().into_val(&env)],
         );
         if registered != Some(from_market.clone()) {
             return Err(ContractError::MarketNotApproved);
@@ -279,6 +282,7 @@ impl Treasury {
             .set(&key_balance(&env), &(balance + amount));
 
         events::emit_bet_deposited(&env, from_market, bettor, market_id, amount);
+        Ok(())
     }
 
     /// Receives protocol fees from a registered `Market` contract.
@@ -309,7 +313,7 @@ impl Treasury {
         let registered: Option<Address> = env.invoke_contract(
             &factory,
             &Symbol::new(&env, "get_market_address"),
-            soroban_sdk::vec![&env, market_id.to_val()],
+            soroban_sdk::vec![&env, market_id.clone().into_val(&env)],
         );
         if registered != Some(caller.clone()) {
             return Err(ContractError::MarketNotApproved);
@@ -338,6 +342,7 @@ impl Treasury {
             .get(&key_token(&env))
             .expect("token not set");
         events::emit_fee_deposited(&env, caller, token_addr, amount);
+        Ok(())
     }
 
     /// Reclassifies a market's pro-rata rounding residue as protocol fees (C-69).
@@ -374,7 +379,7 @@ impl Treasury {
         let registered: Option<Address> = env.invoke_contract(
             &factory,
             &Symbol::new(&env, "get_market_address"),
-            soroban_sdk::vec![&env, market_id.to_val()],
+            soroban_sdk::vec![&env, market_id.clone().into_val(&env)],
         );
         if registered != Some(from_market.clone()) {
             panic!("unauthorized: caller is not a registered market");
@@ -393,7 +398,6 @@ impl Treasury {
             (Symbol::new(&env, "DustSwept"),),
             (from_market, market_id, amount, env.ledger().timestamp()),
         );
-        Ok(())
     }
 
     /// Transfers collected fees from the treasury to a recipient address.
@@ -455,7 +459,7 @@ impl Treasury {
             .get(&key_balance(&env))
             .unwrap_or(0);
         if amount > balance {
-            return Err(ContractError::InsufficientBalance);
+            panic!("amount exceeds balance");
         }
         env.storage()
             .persistent()
@@ -517,7 +521,6 @@ impl Treasury {
             (Symbol::new(&env, "WinningsReleased"),),
             (from_market, market_id, recipient, amount),
         );
-        Ok(())
     }
 
     /// Drains all treasury funds to `recipient` in an emergency.

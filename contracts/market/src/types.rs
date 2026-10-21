@@ -32,6 +32,18 @@ pub enum SettledOutcome {
     NoContest,
 }
 
+impl SettledOutcome {
+    pub fn require_resolved(&self) -> Outcome {
+        match self {
+            SettledOutcome::FighterA => Outcome::FighterA,
+            SettledOutcome::FighterB => Outcome::FighterB,
+            SettledOutcome::Draw => Outcome::Draw,
+            SettledOutcome::NoContest => Outcome::NoContest,
+            SettledOutcome::Pending => panic!("market not resolved"),
+        }
+    }
+}
+
 /// Full market state held by a deployed Market contract instance (market-only).
 #[contracttype]
 #[derive(Clone, Debug)]

@@ -68,6 +68,7 @@ impl MarketFactory {
             dispute_window_sec,
             paused: false,
             bet_token,
+            resolution_timeout_sec: dispute_window_sec,
         };
 
         env.storage().persistent().set(&ADMIN, &admin);
@@ -192,8 +193,10 @@ impl MarketFactory {
         preimage.append(&caller.to_xdr(&env));
 
         let market_id_hash = env.crypto().sha256(&preimage);
-        let market_id = Bytes::from_array(&env, &market_id_hash);
-        let salt = market_id_hash;
+        let mut id_bytes = market_id_hash.to_array();
+        id_bytes[0..8].copy_from_slice(&count.to_le_bytes());
+        let market_id = Bytes::from_array(&env, &id_bytes);
+        let salt: BytesN<32> = market_id_hash.into();
 
         // Load wasm hash from storage
         let wasm_hash: BytesN<32> = env.storage()
@@ -232,8 +235,8 @@ impl MarketFactory {
                 market_id.clone().into_val(&env),
                 fighter_a_struct.into_val(&env),
                 fighter_b_struct.into_val(&env),
-                lock_time.into_val(&env),
                 end_time.into_val(&env),
+                lock_time.into_val(&env),
                 oracle.clone().into_val(&env),
                 env.current_contract_address().into_val(&env),
                 config.default_fee_bp.into_val(&env),
@@ -284,6 +287,12 @@ impl MarketFactory {
         env.storage()
             .persistent()
             .get(&(key_prefix, key_suffix))
+    }
+
+    /// Returns the deployed contract address for `market_id`, if registered.
+    /// Used by `Treasury` to verify cross-contract calls (`deposit`, `deposit_fees`, `sweep_dust`).
+    pub fn get_market_address(env: Env, market_id: Bytes) -> Option<Address> {
+        Self::get_market(env, market_id).map(|info| info.market_address)
     }
 
     /// Returns a bounded, stably-ordered (creation order) page of all markets
@@ -744,13 +753,13 @@ mod tests {
             &(now + 2000),
         );
 
-        let active_before = client.list_active_markets();
+        let active_before = client.list_active_markets(&0, &10);
         assert_eq!(active_before.len(), 2);
 
         // Advance the ledger past the first market's end_time.
         env.ledger().with_mut(|l| l.timestamp = now + 500);
 
-        let active_after = client.list_active_markets();
+        let active_after = client.list_active_markets(&0, &10);
         assert_eq!(active_after.len(), 1);
         assert_eq!(active_after.get(0).unwrap().market_id, later_ending);
         assert_ne!(active_after.get(0).unwrap().market_id, soon_ending);

@@ -240,12 +240,11 @@ impl MarketContract {
         let factory: Address = env.storage().persistent()
             .get(&DataKey::Factory)
             .ok_or(ContractError::NotInitialized)?;
-        let config: Result<ProtocolConfig, ContractError> = env.invoke_contract(
+        let config: ProtocolConfig = env.invoke_contract(
             &factory,
             &Symbol::new(&env, "get_config"),
             soroban_sdk::vec![&env],
         );
-        let config = config?;
 
         // Check if protocol is paused (claims and refunds remain available)
         if config.paused {
@@ -272,7 +271,7 @@ impl MarketContract {
             .persistent()
             .get(&DataKey::BetsByAddr(bettor.clone()))
             .unwrap_or(Vec::new(&env));
-        if existing_bets.len() >= MAX_BETS_PER_ADDRESS as usize {
+        if existing_bets.len() >= MAX_BETS_PER_ADDRESS {
             return Err(ContractError::TooManyBets);
         }
 
@@ -530,7 +529,7 @@ impl MarketContract {
         // Draw reuses the Cancelled path so both sides receive full refunds with no fee.
         // If nobody backed the winning side, the losing stakes would have no
         // claimant, so fall back to refund mode as well (C-70).
-        let winning_pool_empty = winning_pool_for(&market, &outcome) == Some(0);
+        let winning_pool_empty = Self::winning_pool_for(&market, &outcome) == Some(0);
         market.status = match outcome {
             Outcome::NoContest | Outcome::Draw => MarketStatus::Cancelled,
             _ if winning_pool_empty => MarketStatus::Cancelled,
@@ -606,7 +605,7 @@ impl MarketContract {
         }
 
         let outcome = market.outcome.require_resolved();
-        if !bet_wins(&bet.side, &outcome) {
+        if !Self::bet_wins(&bet.side, &outcome) {
             return Err(ContractError::NotWinner);
         }
 
@@ -617,8 +616,8 @@ impl MarketContract {
             return Err(ContractError::AlreadyClaimed);
         }
 
-        let winning_pool = winning_pool_for(&market, &outcome).ok_or(ContractError::InvalidMarketStatus)?;
-        let payout = pro_rata_payout(bet.amount, net_pool(&market), winning_pool);
+        let winning_pool = Self::winning_pool_for(&market, &outcome).ok_or(ContractError::InvalidMarketStatus)?;
+        let payout = Self::pro_rata_payout(bet.amount, Self::net_pool(&market), winning_pool);
 
         // Mark claimed BEFORE any transfer (re-entrancy guard).
         env.storage().persistent().set(&DataKey::Claimed(bet_id.clone()), &true);
@@ -688,8 +687,8 @@ impl MarketContract {
         }
 
         let outcome = market.outcome.require_resolved();
-        let winning_pool = winning_pool_for(&market, &outcome).ok_or(ContractError::InvalidMarketStatus)?;
-        let net = net_pool(&market);
+        let winning_pool = Self::winning_pool_for(&market, &outcome).ok_or(ContractError::InvalidMarketStatus)?;
+        let net = Self::net_pool(&market);
 
         let bet_ids: Vec<Bytes> = env.storage().persistent()
             .get(&DataKey::BetsByAddr(bettor.clone()))
@@ -702,7 +701,7 @@ impl MarketContract {
                 Some(b) => b,
                 None => continue,
             };
-            if bet.bettor != bettor || !bet_wins(&bet.side, &outcome) {
+            if bet.bettor != bettor || !Self::bet_wins(&bet.side, &outcome) {
                 continue;
             }
             let already_claimed: bool = env.storage().persistent()
@@ -715,7 +714,7 @@ impl MarketContract {
             // Mark claimed BEFORE any transfer (re-entrancy guard).
             env.storage().persistent().set(&DataKey::Claimed(bet_id.clone()), &true);
             total = total
-                .checked_add(pro_rata_payout(bet.amount, net, winning_pool))
+                .checked_add(Self::pro_rata_payout(bet.amount, net, winning_pool))
                 .ok_or(ContractError::InvalidMarketStatus)?;
             claimed_ids.push_back(bet_id);
         }
@@ -773,8 +772,8 @@ impl MarketContract {
         }
 
         let outcome = market.outcome.require_resolved();
-        let winning_pool = winning_pool_for(&market, &outcome).ok_or(ContractError::InvalidMarketStatus)?;
-        let net = net_pool(&market);
+        let winning_pool = Self::winning_pool_for(&market, &outcome).ok_or(ContractError::InvalidMarketStatus)?;
+        let net = Self::net_pool(&market);
 
         // Use pre-calculated winning_stake_sum for O(1) calculation
         let winning_stake_sum = match outcome {
@@ -783,7 +782,7 @@ impl MarketContract {
             _ => 0,
         };
 
-        let owed = pro_rata_payout(winning_stake_sum, net, winning_pool);
+        let owed = Self::pro_rata_payout(winning_stake_sum, net, winning_pool);
         let dust = net.checked_sub(owed).ok_or(ContractError::InvalidMarketState)?;
 
         env.storage().persistent().set(&DataKey::DustSwept, &true);
@@ -947,7 +946,7 @@ impl MarketContract {
         }
 
         // Cap reason length to prevent storage abuse.
-        if reason.len() > MAX_DISPUTE_REASON_LEN as usize {
+        if reason.len() > MAX_DISPUTE_REASON_LEN {
             return Err(ContractError::InvalidMarketState);
         }
 
@@ -1233,12 +1232,12 @@ impl MarketContract {
             SettledOutcome::NoContest => shared::types::Outcome::NoContest,
         };
 
-        if !bet_wins(&bet.side, &outcome) {
+        if !Self::bet_wins(&bet.side, &outcome) {
             return 0;
         }
 
-        match winning_pool_for(&market, &outcome) {
-            Some(winning_pool) => pro_rata_payout(bet.amount, net_pool(&market), winning_pool),
+        match Self::winning_pool_for(&market, &outcome) {
+            Some(winning_pool) => Self::pro_rata_payout(bet.amount, Self::net_pool(&market), winning_pool),
             None => 0,
         }
     }
@@ -1377,12 +1376,14 @@ mod tests {
             let admin: Address = env.storage().persistent().get(&Symbol::new(&env, "admin")).unwrap();
             ProtocolConfig {
                 admin: admin.clone(),
-                fee_collector: admin,
+                fee_collector: admin.clone(),
                 default_fee_bp: 200,
                 min_bet_amount: 100,
                 max_bet_amount: 1_000_000,
                 dispute_window_sec: 86_400,
                 paused: false,
+                bet_token: admin,
+                resolution_timeout_sec: 86_400,
             }
         }
     }
@@ -1394,6 +1395,9 @@ mod tests {
     #[contractimpl]
     impl MockTreasury {
         pub fn deposit(_env: Env, _from_market: Address, _market_id: Bytes, _bettor: Address, _amount: i128) {}
+        pub fn deposit_fees(_env: Env, _market_id: Bytes, _amount: i128) {}
+        pub fn release_winnings(_env: Env, _from_market: Address, _market_id: Bytes, _recipient: Address, _amount: i128) {}
+        pub fn sweep_dust(_env: Env, _from_market: Address, _market_id: Bytes, _amount: i128) {}
     }
 
     // ─── Setup ────────────────────────────────────────────────────────────────
@@ -1662,29 +1666,29 @@ mod tests {
         let (ctx, bettor, _) = resolved_ctx(Outcome::FighterA);
         let reason = Bytes::from_slice(
             &ctx.env,
-            &vec![b'x'; MAX_DISPUTE_REASON_LEN as usize],
+            &std::vec![b'x'; MAX_DISPUTE_REASON_LEN as usize],
         );
         ctx.client.dispute_resolution(&bettor, &reason);
     }
 
     #[test]
-    #[should_panic(expected = "dispute reason exceeds maximum length")]
     fn test_dispute_reason_over_max_length_rejected() {
         let (ctx, bettor, _) = resolved_ctx(Outcome::FighterA);
         let reason = Bytes::from_slice(
             &ctx.env,
-            &vec![b'x'; (MAX_DISPUTE_REASON_LEN + 1) as usize],
+            &std::vec![b'x'; (MAX_DISPUTE_REASON_LEN + 1) as usize],
         );
-        ctx.client.dispute_resolution(&bettor, &reason);
+        let res = ctx.client.try_dispute_resolution(&bettor, &reason);
+        assert_eq!(res, Err(Ok(ContractError::InvalidMarketState)));
     }
 
     #[test]
-    #[should_panic(expected = "dust already swept")]
     fn test_sweep_dust_cannot_run_twice() {
         let (ctx, _, _) = resolved_ctx(Outcome::FighterA);
         // Jump well past resolved_at + dispute_window_sec + CLAIM_WINDOW_SEC.
         set_time(&ctx.env, 10_000_000);
         ctx.client.sweep_dust(&ctx.market_id);
-        ctx.client.sweep_dust(&ctx.market_id);
+        let res = ctx.client.try_sweep_dust(&ctx.market_id);
+        assert_eq!(res, Err(Ok(ContractError::InvalidMarketState)));
     }
 }
